@@ -1,0 +1,605 @@
+---
+title: "Stat 427 Consulting Project Group 7"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+```{css, echo=FALSE}
+.solution {
+background-color: #CCDDFF;
+}
+```
+
+# Loading the Packages and Data
+
+```{r}
+Sys.setenv(LANGUAGE = "en")
+
+# Load Exploratory data analysis packages
+library(dlookr)
+library(GGally)
+library(readxl)
+library(tidyverse)
+
+# Load data modeling packages
+library(lme4)
+library(emmeans)
+library(optimx)
+library(psych)
+library(car)
+library(MuMIn)
+library(pwr)
+
+# Load data visualization packages
+library(ggplot2)
+library(ggpubr)
+
+# Load data
+priming_dataset <- read_excel("priming_dataset_cleaned_v2.xlsx")
+
+# Remove gender, age, bilingual_type and lang_variety columns
+priming_dataset <- priming_dataset %>%
+  select(-c(gender,age,bilingual_type,lang_variety))
+```
+
+Feature Types:
+
+Numerical Features:
+
+- BLP
+
+- language_use_span
+
+- language_use_eng
+
+- MLU_spa
+
+- Words_Min_spa
+
+- VOCD_spa
+
+- MLU_eng
+
+- Words_Min_eng
+
+- VOCD_eng
+
+Categorical Features:
+
+- subject
+
+- group
+
+- phase
+
+- construction
+
+- mode
+
+- target
+
+- n_item
+
+```{r}
+# Convert Categorical features into factors
+Cat_features <- c("subject","group","phase","construction","mode","target","n_item")
+priming_dataset[,Cat_features] <- lapply(priming_dataset[,Cat_features] , factor)
+
+# View the data
+priming_dataset %>%
+  head()
+```
+# Missing Value
+
+```{r}
+# Check columns containing missing value
+priming_dataset %>% 
+  select_if(function(x) any(is.na(x))) %>% 
+  summarise_each(funs(sum(is.na(.)))) 
+```
+
+No missing value
+
+# RQ1
+
+Is the priming effect stronger with the ACC or with the SPE construction?
+
+## Exploratory Data Analysis (Categorical Features)
+
+```{r}
+# Filter the data set for RQ1
+priming_dataset_rq1 <- priming_dataset %>%
+  filter(mode=="within")
+
+# Check the structure of RQ1 data
+str(priming_dataset_rq1[,Cat_features])
+```
+
+### Explore the relationship between "group" and "target"
+
+```{r}
+# Create a contingency table of the "target" and "group"
+addmargins(table(priming_dataset_rq1$group, priming_dataset_rq1$target))
+```
+
+```{r}
+# Create a proportional contingency table of the "target" and "group"
+prop.table(table(priming_dataset_rq1$group, priming_dataset_rq1$target), margin=1)*100
+```
+
+```{r}
+# Visualize the proportional contingency table
+ggplot(priming_dataset_rq1) +
+  aes(x = group, fill = target) +
+  geom_bar(position = "fill") + 
+  xlab("Group") + 
+  ylab("Proportion")
+```
+
+```{r}
+# Chi-Square concept: https://data-flair.training/blogs/chi-square-test-in-r/
+
+# Perform Chi-Square test
+set.seed(1) 
+priming_dataset_rq1_sample <- priming_dataset_rq1[sample(length(priming_dataset_rq1$subject), 1000), ]
+chisq.test(priming_dataset_rq1_sample$group, priming_dataset_rq1_sample$target)
+```
+
+### Explore the relationship between "phase" and "target"
+
+```{r}
+# Create a contingency table of the "target" and "phase"
+addmargins(table(priming_dataset_rq1$phase, priming_dataset_rq1$target))
+```
+
+```{r}
+# Create a proportional contingency table of the "target" and "phase"
+prop.table(table(priming_dataset_rq1$phase, priming_dataset_rq1$target), margin=1)*100
+```
+
+```{r}
+# Visualize the proportional contingency table
+ggplot(priming_dataset_rq1) +
+  aes(x = phase, fill = target) +
+  geom_bar(position = "fill") + 
+  xlab("Phase") + 
+  ylab("Proportion")
+```
+
+```{r}
+# Perform Chi-Square test
+set.seed(1) 
+priming_dataset_rq1_sample <- priming_dataset_rq1[sample(length(priming_dataset_rq1$subject), 1000), ]
+chisq.test(priming_dataset_rq1_sample$phase, priming_dataset_rq1_sample$target)
+```
+
+### Explore the relationship between "construction" and "target"
+
+```{r}
+# Create a contingency table of the "target" and "construction"
+addmargins(table(priming_dataset_rq1$construction, priming_dataset_rq1$target))
+```
+
+```{r}
+# Create a proportional contingency table of the "target" and "construction"
+prop.table(table(priming_dataset_rq1$construction, priming_dataset_rq1$target), margin=1)*100
+```
+
+```{r}
+# Visualize the proportional contingency table
+ggplot(priming_dataset_rq1) +
+  aes(x = construction, fill = target) +
+  geom_bar(position = "fill") + 
+  xlab("Construction") + 
+  ylab("Proportion")
+```
+
+```{r}
+# Perform Chi-Square test
+set.seed(1) 
+priming_dataset_rq1_sample <- priming_dataset_rq1[sample(length(priming_dataset_rq1$subject), 1000), ]
+chisq.test(priming_dataset_rq1$construction, priming_dataset_rq1$target)
+```
+
+## Data Modeling
+### Generalized linear mixed model fit by maximum likelihood - item level
+
+```{r}
+# Reorder the level of the features
+priming_dataset_rq1$phase = relevel(priming_dataset_rq1$phase, ref = "pre-test")
+priming_dataset_rq1$construction = relevel(priming_dataset_rq1$construction, ref = "spe")
+priming_dataset_rq1$target = relevel(priming_dataset_rq1$target, ref = "no")
+
+# How to avoid the convergence problem (Change a optimizer):  https://stats.stackexchange.com/questions/242109/model-failed-to-converge-warning-in-lmer
+
+# Run the glm model
+glm_rq1 = lme4::glmer(target ~ phase * construction + group + (1|subject)+ (1|n_item),
+                     data = priming_dataset_rq1, family = "binomial",
+                     control = glmerControl(optimizer ='optimx', optCtrl=list(method='nlminb')))
+summary(glm_rq1)
+```
+
+
+```{r}
+# Estimate marginal means by construction
+pairs(emmeans(glm_rq1, "phase", by = "construction"))
+```
+
+
+```{r}
+# Estimate marginal means by phase
+pairs(emmeans(glm_rq1, "construction", by = "phase"))
+```
+
+## Power Analysis
+
+```{r}
+# Pseudo-R-square for the GLM Function: https://search.r-project.org/CRAN/refmans/MuMIn/html/r.squaredGLMM.html
+
+# Calculate Pseudo-R-squared for Generalized Mixed-Effect models
+MuMIn::r.squaredGLMM(glm_rq1)
+```
+
+```{r}
+# Power Analysis in linguistic area (Literature Review): https://www.jstor.org/stable/3587103
+
+# Use R to calculate the power https://cran.r-project.org/web/packages/pwr/vignettes/pwr-vignette.html
+
+# Calculate the power for RQ1
+pwr.f2.test(u = 7, v =  124-7-1, f2 = 0.3294668/(1-0.3294668), sig.level = 0.05)
+```
+
+
+
+# RQ2
+Is the priming effect stronger in within-language mode or in cross-linguistic mode?
+
+## Exploratory Data Analysis (Categorical Features)
+
+```{r}
+# Filter the data set for RQ1
+priming_dataset_rq2 <- priming_dataset %>%
+  filter(construction=="spe")
+
+# Check the structure of RQ1 data
+str(priming_dataset_rq2[,Cat_features])
+```
+
+### Explore the relationship between "group" and "target"
+
+```{r}
+# Create a contingency table of the "target" and "group"
+addmargins(table(priming_dataset_rq2$group, priming_dataset_rq2$target))
+```
+
+```{r}
+# Create a proportional contingency table of the "target" and "group"
+prop.table(table(priming_dataset_rq2$group, priming_dataset_rq2$target), margin=1)*100
+```
+
+```{r}
+# Visualize the proportional contingency table
+ggplot(priming_dataset_rq2) +
+  aes(x = group, fill = target) +
+  geom_bar(position = "fill") + 
+  xlab("Group") + 
+  ylab("Proportion")
+```
+
+```{r}
+# Perform Chi-Square test
+set.seed(1) 
+priming_dataset_rq2_sample <- priming_dataset_rq2[sample(length(priming_dataset_rq2$subject), 1000), ]
+chisq.test(priming_dataset_rq2_sample$group, priming_dataset_rq2_sample$target)
+```
+
+### Explore the relationship between "phase" and "target"
+
+```{r}
+# Create a contingency table of the "target" and "phase"
+addmargins(table(priming_dataset_rq2$phase, priming_dataset_rq2$target))
+```
+
+```{r}
+# Create a proportional contingency table of the "target" and "phase"
+prop.table(table(priming_dataset_rq2$phase, priming_dataset_rq2$target), margin=1)*100
+```
+
+```{r}
+# Visualize the proportional contingency table
+ggplot(priming_dataset_rq2) +
+  aes(x = phase, fill = target) +
+  geom_bar(position = "fill") + 
+  xlab("Phase") + 
+  ylab("Proportion")
+```
+
+```{r}
+# Perform Chi-Square test
+set.seed(1) 
+priming_dataset_rq2_sample <- priming_dataset_rq2[sample(length(priming_dataset_rq2$subject), 1000), ]
+chisq.test(priming_dataset_rq2_sample$phase, priming_dataset_rq2_sample$target)
+```
+
+### Explore the relationship between "construction" and "target"
+
+```{r}
+# Create a contingency table of the "target" and "mode"
+addmargins(table(priming_dataset_rq2$mode, priming_dataset_rq2$target))
+```
+
+```{r}
+# Create a proportional contingency table of the "target" and "mode"
+prop.table(table(priming_dataset_rq2$mode, priming_dataset_rq2$target), margin=1)*100
+```
+
+```{r}
+# Visualize the proportional contingency table
+ggplot(priming_dataset_rq2) +
+  aes(x = mode, fill = target) +
+  geom_bar(position = "fill") + 
+  xlab("Mode") + 
+  ylab("Proportion")
+```
+
+```{r}
+# Perform Chi-Square test
+set.seed(1) 
+priming_dataset_rq2_sample <- priming_dataset_rq2[sample(length(priming_dataset_rq2$subject), 1000), ]
+chisq.test(priming_dataset_rq2_sample$mode, priming_dataset_rq2_sample$target)
+```
+
+## Data Modeling
+
+### Generalized linear mixed model fit by maximum likelihood - item level
+
+```{r}
+# Reorder the level of the features
+priming_dataset_rq2$phase = relevel(priming_dataset_rq2$phase, ref = "pre-test")
+priming_dataset_rq2$mode = relevel(priming_dataset_rq2$mode, ref = "within")
+priming_dataset_rq2$target = relevel(priming_dataset_rq2$target, ref = "no")
+
+# Run the glm model
+glm_rq2 = lme4::glmer(target ~ phase * mode + group + (1|subject)+ (1|n_item),
+                     data = priming_dataset_rq2, family = "binomial",
+                     control = glmerControl(optimizer ='optimx', optCtrl=list(method='nlminb')))
+
+summary(glm_rq2)
+```
+
+
+```{r}
+# Estimate marginal means by mode
+pairs(emmeans(glm_rq2, "phase", by = "mode"))
+```
+
+
+```{r}
+# Estimate marginal means by phase
+pairs(emmeans(glm_rq2, "mode", by = "phase"))
+```
+
+### Why mode not significant?
+
+```{r}
+# Split the data set based on phase
+priming_dataset_rq2_pre <- priming_dataset_rq2 %>%
+  filter(phase=="pre-test")
+priming_dataset_rq2_treat <- priming_dataset_rq2 %>%
+  filter(phase=="treatment")
+priming_dataset_rq2_post <- priming_dataset_rq2 %>%
+  filter(phase=="post-test")
+
+# Visualize the proportional contingency tables by different phases
+pre_plot <- ggplot(priming_dataset_rq2_pre) +
+  aes(x = mode, fill = target) +
+  geom_bar(position = "fill") + 
+  xlab("Mode") + 
+  ylab("Proportion")
+
+treat_plot <- ggplot(priming_dataset_rq2_treat) +
+  aes(x = mode, fill = target) +
+  geom_bar(position = "fill") + 
+  xlab("Mode") + 
+  ylab("Proportion")
+
+post_plot <- ggplot(priming_dataset_rq2_post) +
+  aes(x = mode, fill = target) +
+  geom_bar(position = "fill") + 
+  xlab("Mode") + 
+  ylab("Proportion")
+
+ggarrange(pre_plot, treat_plot, post_plot, 
+          labels = c("pre-test", "treatment", "post-test"),
+          ncol = 2, nrow = 2)
+```
+
+## Power Analysis
+
+```{r}
+# Calculate Pseudo-R-squared for Generalized Mixed-Effect models
+MuMIn::r.squaredGLMM(glm_rq2)
+```
+
+```{r}
+# Calculate the power for RQ2
+pwr.f2.test(u = 7, v =  124-7-1, f2 = 0.1616664/(1-0.1616664), sig.level = 0.05)
+```
+
+# RQ3
+
+Which individual variables are associated with a strong priming effect?
+
+## Exploratory Data Analysis (Numerical Features)
+
+```{r}
+# Select numerical features
+priming_dataset_rq3 <- priming_dataset %>%
+  select(c("subject","n_item","target","BLP","language_use_span","language_use_eng","MLU_spa","Words_Min_spa","VOCD_spa","MLU_eng","Words_Min_eng","VOCD_eng"))
+
+priming_dataset_rq3 %>%
+  head()
+```
+
+### Pairplot Analysis
+
+```{r}
+
+# Pairplot theme https://ggplot2.tidyverse.org/reference/theme.html
+# Pairplot text size: https://stackoverflow.com/questions/8599685/how-to-change-correlation-text-size-in-ggpairs
+
+# Check the pair plot
+ggpairs(priming_dataset_rq3, columns = 3:12,upper=list(continuous = wrap("cor",size=2)), aes(colour=target,alpha = 0.5))+theme( strip.text = element_text(size = 5),axis.text = element_text(size = 5))
+```
+
+### Correlation analysis
+
+```{r}
+# Check strongly correlated variables
+cor_matrix <- as.data.frame(cor(priming_dataset_rq3[,4:12],method="pearson"))
+cor_matrix[abs(cor_matrix) < 0.5] <- ""
+cor_matrix
+```
+
+- "BLP" is strongly correlated with "language_use_span","language_use_eng" and "Words_Min_eng"
+
+- "language_use_span" is exactly correlated with "language_use_eng" and strongly correlated with "Words_Min_eng"
+
+```{r}
+# Remove "language_use_eng"
+priming_dataset_rq3 <- priming_dataset_rq3 %>%
+  select(-language_use_eng)
+
+priming_dataset_rq3 %>%
+  head()
+```
+
+```{r}
+# The the mean difference of individual variables between target yes and target no
+priming_dataset_rq3 %>%
+  group_by(target) %>%
+  summarize(BLP_mean=mean(BLP), language_use_span_mean=mean(language_use_span), MLU_spa_mean=mean(MLU_spa), Words_Min_spa_mean=mean(Words_Min_spa), VOCD_spa_mean=mean(VOCD_spa), MLU_eng_mean=mean(MLU_eng), Words_Min_eng_mean=mean(Words_Min_eng), VOCD_eng_mean=mean(VOCD_eng))
+```
+
+## Data Modeling 
+
+### Linear Regression (subject level)
+
+We recommend our client to use glm method not linear regression in RQ3. Therefore, this part can be used just as FYI
+
+```{r}
+# Simplify the data set into subject level
+priming_dataset_rq3_sbj <- priming_dataset_rq3 %>%
+  select(-n_item) %>%
+  mutate(target_num=ifelse(target=="no",0,1)) %>%
+  group_by(subject,BLP,language_use_span,MLU_spa,Words_Min_spa,VOCD_spa,MLU_eng,Words_Min_eng,VOCD_eng) %>%
+  summarize(target_mean=mean(target_num)) %>%
+  as.data.frame()
+
+priming_dataset_rq3_sbj%>%
+  head()
+```
+
+```{r}
+# Check the pair plot
+ggpairs(priming_dataset_rq3_sbj, columns = 2:10)
+```
+
+```{r}
+# Perform the linear regression model
+lm.fit <- lm(target_mean~BLP+language_use_span+MLU_spa+Words_Min_spa+VOCD_spa+MLU_eng+Words_Min_eng+VOCD_eng, data = priming_dataset_rq3_sbj)
+summary(lm.fit)
+```
+```{r}
+# vif and multicollinearity https://www.analyticsvidhya.com/blog/2020/03/what-is-multicollinearity/
+vif(lm.fit)
+```
+
+BLP and language_use_span have vif greater than 10. Therefore, remove one of them (language_use_span) to address the multicollinearity problem.
+
+```{r}
+# Perform the linear regression model
+lm.fit <- lm(target_mean~BLP+MLU_spa+Words_Min_spa+VOCD_spa+MLU_eng+Words_Min_eng+VOCD_eng, data = priming_dataset_rq3_sbj)
+summary(lm.fit)
+```
+
+```{r}
+# Perform stepwise regression for variable selection
+full <- lm(target_mean~BLP+MLU_spa+Words_Min_spa+VOCD_spa+MLU_eng+Words_Min_eng+VOCD_eng, data = priming_dataset_rq3_sbj)
+
+null <- lm(target_mean~1, data = priming_dataset_rq3_sbj)
+
+step(null,scope=list(upper=full,lower=null), data =priming_dataset_rq3_sbj, direction="both")
+```
+
+```{r}
+# Perform the linear regression model after stepwise variable selection
+lm.fit_sig <- lm(target_mean ~ BLP, data = priming_dataset_rq3_sbj)
+summary(lm.fit_sig)
+```
+
+### Generalized linear mixed model fit by maximum likelihood
+
+```{r}
+# Parameters or bounds appear to have different scalings can cause poor performance in optimization. Therefore, scale all the features
+
+# Scale the features
+priming_dataset_rq3_std <- priming_dataset_rq3 %>% 
+  mutate_at(colnames(priming_dataset_rq3)[4:11], ~(scale(.) %>% as.vector))
+
+# Perform the generalized linear mixed model fit by maximum likelihood
+glm_rq3 <- lme4::glmer(target ~ BLP +  language_use_span + MLU_spa + Words_Min_spa + VOCD_spa + MLU_eng + Words_Min_eng + VOCD_eng + (1|subject) + (1|n_item),
+                     data = priming_dataset_rq3_std, family = "binomial",
+                     control = glmerControl(optimizer ='optimx', optCtrl=list(method='nlminb')))
+summary(glm_rq3)
+```
+
+```{r}
+# Check the vif score
+vif(glm_rq3)
+```
+
+```{r}
+# Perform the generalized linear mixed model fit by maximum likelihood again after remove language_use_span
+glm_rq3 <- lme4::glmer(target ~ BLP + MLU_spa + Words_Min_spa + VOCD_spa + 
+                        MLU_eng + Words_Min_eng + VOCD_eng + (1|subject) + (1|n_item),
+                     data = priming_dataset_rq3_std, family = "binomial",
+                     control = glmerControl(optimizer ='optimx', optCtrl=list(method='nlminb')))
+summary(glm_rq3)
+```
+
+```{r}
+# Check the vif score again
+vif(glm_rq3)
+```
+
+```{r}
+# Check the model after stepwise variable selection as well
+glm_rq3_sig <- lme4::glmer(target ~ BLP + (1|subject) + (1|n_item),
+                     data = priming_dataset_rq3_std, family = "binomial",
+                     control = glmerControl(optimizer ='optimx', optCtrl=list(method='nlminb')))
+summary(glm_rq3_sig)
+```
+
+## Power Analysis
+
+```{r}
+# Calculate Pseudo-R-squared for Generalized Mixed-Effect models
+MuMIn::r.squaredGLMM(glm_rq3)
+```
+```{r}
+# Calculate the power for RQ3
+pwr.f2.test(u = 7, v =  124-7-1, f2 = 0.005760835/(1-0.005760835), sig.level = 0.05)
+```
+
